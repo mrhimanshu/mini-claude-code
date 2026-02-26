@@ -1,4 +1,5 @@
 ---
+name: git-workflow
 description: Git workflow conventions and commit practices
 ---
 

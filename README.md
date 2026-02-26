@@ -112,9 +112,9 @@ The LangGraph `StateGraph` implements the core `while tool_use: loop`. The `rout
 The `delegate_task` tool spawns a fresh `ChatAnthropic` instance with a clean message list and child-only tools (no recursive spawning). Only the subagent's final text response returns to the parent, keeping the parent's context clean.
 
 ### s05 — Skill Loading
-`tools/skills.py`, `.skills/*.md`
+`tools/skills.py`, `.skills/*/SKILL.md`
 
-Two-layer injection. **Layer 1:** short skill descriptions are injected into the system prompt (~100 tokens each). **Layer 2:** the `load_skill` tool loads the full skill body on demand, wrapped in `<skill>` tags. Skills are Markdown files with YAML frontmatter in `.skills/`.
+Two-layer injection. **Layer 1:** short skill descriptions are injected into the system prompt (~100 tokens each). **Layer 2:** the `load_skill` tool loads the full skill body on demand, wrapped in `<skill>` tags. Each skill is a folder under `.skills/` containing a `SKILL.md` file with YAML frontmatter (`name` and `description`) and markdown instructions.
 
 ### s06 — Context Compaction
 `context/compactor.py`, `tools/compact.py`
@@ -161,9 +161,9 @@ When a teammate finishes its work, it enters an idle polling phase: every 5 seco
 ```
 mini-claude-code/
 ├── .env                          # ANTHROPIC_API_KEY (not committed)
-├── .skills/                      # Skill definition files (Markdown + YAML frontmatter)
-│   ├── code_review.md
-│   └── git_workflow.md
+├── .skills/                      # Skill folders (each with SKILL.md)
+│   ├── code-review/SKILL.md
+│   └── git-workflow/SKILL.md
 ├── pyproject.toml                # uv project config + dependencies
 ├── src/mini_claude_code/
 │   ├── __init__.py

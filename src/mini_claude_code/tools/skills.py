@@ -3,6 +3,9 @@
 Layer 1: Short descriptions in the system prompt (cheap).
 Layer 2: Full body loaded on-demand via load_skill tool.
 
+Skills are folders under .skills/ containing a SKILL.md file with YAML
+frontmatter (name + description) and markdown body instructions.
+
 Skill files are loaded synchronously at init (one-time), but the
 load_skill tool is async for LangGraph compatibility.
 """
@@ -18,7 +21,11 @@ from mini_claude_code.config import SKILLS_DIR
 
 
 class SkillLoader:
-    """Loads .md skill files from the skills directory."""
+    """Loads skill folders from the skills directory.
+
+    Each skill is a subfolder containing a SKILL.md file with YAML
+    frontmatter specifying ``name`` and ``description``.
+    """
 
     def __init__(self, skills_dir: Path) -> None:
         self.skills_dir = skills_dir
@@ -29,10 +36,12 @@ class SkillLoader:
         """Reload skills from disk. Called once at init."""
         new_skills: dict[str, dict] = {}
         if self.skills_dir.exists():
-            for f in sorted(self.skills_dir.glob("*.md")):
-                text = f.read_text(errors="replace")
+            for skill_md in sorted(self.skills_dir.glob("*/SKILL.md")):
+                text = skill_md.read_text(errors="replace")
                 meta, body = self._parse_frontmatter(text)
-                new_skills[f.stem] = {"meta": meta, "body": body}
+                # Use the 'name' field from frontmatter; fall back to folder name
+                skill_name = meta.get("name", skill_md.parent.name)
+                new_skills[skill_name] = {"meta": meta, "body": body}
         # Atomic swap (no clear-then-repopulate race)
         self.skills = new_skills
 
@@ -74,8 +83,11 @@ SKILL_LOADER = SkillLoader(SKILLS_DIR)
 async def load_skill(name: str) -> str:
     """Load a skill by name. Returns the full skill instructions.
 
+    Skills are folders under .skills/ with a SKILL.md file containing
+    YAML frontmatter (name, description) and markdown instructions.
+
     Args:
-        name: Name of the skill to load (without .md extension).
+        name: Name of the skill (the 'name' field from SKILL.md frontmatter).
 
     Returns:
         Full skill content wrapped in <skill> tags, or error if not found.

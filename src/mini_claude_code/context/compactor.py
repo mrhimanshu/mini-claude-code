@@ -1,10 +1,13 @@
-"""Three-layer context compaction pipeline (s06) + identity re-injection (s11)."""
+"""Async three-layer context compaction pipeline (s06) + identity re-injection (s11).
+
+All LLM calls use ainvoke. File I/O runs in asyncio.to_thread.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
-from pathlib import Path
 from typing import Sequence
 
 from langchain_core.messages import (
@@ -14,6 +17,8 @@ from langchain_core.messages import (
     RemoveMessage,
     ToolMessage,
 )
+
+# RemoveMessage is still used by auto_compact (for full conversation replacement)
 
 from mini_claude_code.config import (
     KEEP_RECENT_TOOL_RESULTS,
@@ -30,7 +35,6 @@ from mini_claude_code.config import (
 
 
 def estimate_tokens(messages: Sequence[BaseMessage]) -> int:
-    """Rough token estimate for a list of messages."""
     total = 0
     for msg in messages:
         if isinstance(msg.content, str):
@@ -45,14 +49,16 @@ def estimate_tokens(messages: Sequence[BaseMessage]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Layer 1: micro_compact -- replace old tool results with placeholders
+# Layer 1: micro_compact
 # ---------------------------------------------------------------------------
 
 
 def micro_compact(messages: list[BaseMessage]) -> list[BaseMessage]:
-    """Replace tool result messages older than the last KEEP_RECENT with placeholders.
+    """Replace old tool results with short placeholders.
 
-    Returns a new list of update messages (RemoveMessage + replacement ToolMessage).
+    Uses same-ID replacement (not RemoveMessage) so the ToolMessage stays
+    in position and its ``tool_call_id`` is preserved.  This keeps the
+    Anthropic API's tool_use → tool_result pairing intact.
     """
     tool_indices: list[int] = []
     for i, msg in enumerate(messages):
@@ -64,38 +70,44 @@ def micro_compact(messages: list[BaseMessage]) -> list[BaseMessage]:
 
     to_replace = tool_indices[:-KEEP_RECENT_TOOL_RESULTS]
     updates: list[BaseMessage] = []
-
     for idx in to_replace:
         msg = messages[idx]
         if isinstance(msg, ToolMessage) and len(str(msg.content)) > 100:
-            updates.append(RemoveMessage(id=msg.id or ""))
-
+            # Same id → add_messages replaces in-place instead of appending
+            updates.append(
+                ToolMessage(
+                    content="[Previous tool result truncated]",
+                    tool_call_id=msg.tool_call_id,
+                    id=msg.id,
+                )
+            )
     return updates
 
 
 # ---------------------------------------------------------------------------
-# Layer 2: auto_compact -- summarize when tokens exceed threshold
+# Layer 2: auto_compact (async -- uses ainvoke)
 # ---------------------------------------------------------------------------
 
 
-def auto_compact(messages: list[BaseMessage]) -> list[BaseMessage]:
-    """Summarize the entire conversation using the LLM, save transcript.
-
-    Returns the list of message updates to apply (removals + summary).
-    """
+async def auto_compact(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Summarize the entire conversation using the LLM. Saves transcript."""
     from langchain_anthropic import ChatAnthropic
 
-    # Save transcript first
+    # Save transcript
     TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     transcript_path = TRANSCRIPTS_DIR / f"transcript_{int(time.time())}.jsonl"
-    with open(transcript_path, "w") as f:
-        for msg in messages:
-            f.write(
-                json.dumps({"type": msg.type, "content": str(msg.content)[:2000]})
-                + "\n"
-            )
 
-    # Build a summary request
+    def _save_transcript() -> None:
+        with open(transcript_path, "w") as f:
+            for msg in messages:
+                f.write(
+                    json.dumps({"type": msg.type, "content": str(msg.content)[:2000]})
+                    + "\n"
+                )
+
+    await asyncio.to_thread(_save_transcript)
+
+    # Build summary request
     conversation_text = []
     for msg in messages:
         content = str(msg.content)[:1000]
@@ -109,7 +121,7 @@ def auto_compact(messages: list[BaseMessage]) -> list[BaseMessage]:
         timeout=60,
         stop=None,
     )
-    summary_response = llm.invoke(
+    summary_response = await llm.ainvoke(
         f"Summarize this conversation for continuity. "
         f"Focus on: what was accomplished, what is in progress, "
         f"key decisions, file paths mentioned, current task state.\n\n"
@@ -117,17 +129,15 @@ def auto_compact(messages: list[BaseMessage]) -> list[BaseMessage]:
     )
     summary = summary_response.content
 
-    # Build updates: remove all old messages, add summary
+    # Remove all old messages, add summary
     updates: list[BaseMessage] = []
     for msg in messages:
         if msg.id:
             updates.append(RemoveMessage(id=msg.id))
-
     updates.append(HumanMessage(content=f"[Context Compressed]\n\n{summary}"))
     updates.append(
         AIMessage(content="Understood. I have the context summary. Continuing work.")
     )
-
     return updates
 
 
@@ -137,7 +147,6 @@ def auto_compact(messages: list[BaseMessage]) -> list[BaseMessage]:
 
 
 def needs_compaction(messages: Sequence[BaseMessage]) -> bool:
-    """Return True if estimated tokens exceed the threshold."""
     return estimate_tokens(messages) > TOKEN_THRESHOLD
 
 
@@ -149,7 +158,6 @@ def needs_compaction(messages: Sequence[BaseMessage]) -> bool:
 def make_identity_block(
     name: str, role: str, team_name: str = "default"
 ) -> HumanMessage:
-    """Create an identity injection message for after compression."""
     return HumanMessage(
         content=(
             f"<identity>You are '{name}', role: {role}, team: {team_name}. "

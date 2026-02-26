@@ -1,11 +1,11 @@
-"""Subagent: fresh-context child agent for isolated exploration (s04).
+"""Async subagent: fresh-context child agent for isolated exploration (s04).
 
-The subagent gets its own graph with a fresh message list and
-restricted tools (no recursive spawning). Only the final text
-response returns to the parent.
+Uses ainvoke for non-blocking LLM calls and ainvoke for async tool execution.
 """
 
 from __future__ import annotations
+
+import asyncio
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -26,7 +26,7 @@ SUBAGENT_SYSTEM = (
 )
 
 
-def run_subagent(prompt: str) -> str:
+async def run_subagent(prompt: str) -> str:
     """Run a subagent with fresh context. Returns its final text summary."""
     tools = get_child_tools()
     tool_map = {t.name: t for t in tools}
@@ -43,28 +43,32 @@ def run_subagent(prompt: str) -> str:
 
     for _ in range(MAX_SUBAGENT_ITERATIONS):
         try:
-            response = llm.invoke(messages)
+            response = await llm.ainvoke(messages)
         except Exception as e:
             return f"Subagent error: {e}"
 
         messages.append(response)
 
         if not isinstance(response, AIMessage) or not response.tool_calls:
-            # Extract final text
             if isinstance(response, AIMessage) and response.content:
                 return str(response.content)
             return "(subagent produced no output)"
 
-        # Execute tool calls
-        for tc in response.tool_calls:
+        # Execute tool calls in parallel
+        async def _exec_tool(tc: dict) -> ToolMessage:
             tool_fn = tool_map.get(tc["name"])
             if tool_fn:
                 try:
-                    result = tool_fn.invoke(tc["args"])
+                    result = await tool_fn.ainvoke(tc["args"])
                 except Exception as e:
                     result = f"Error: {e}"
             else:
                 result = f"Unknown tool: {tc['name']}"
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+            return ToolMessage(content=str(result), tool_call_id=tc["id"])
+
+        tool_messages = await asyncio.gather(
+            *[_exec_tool(tc) for tc in response.tool_calls]
+        )
+        messages.extend(tool_messages)
 
     return "(subagent reached iteration limit)"

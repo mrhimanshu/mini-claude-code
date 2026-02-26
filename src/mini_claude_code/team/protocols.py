@@ -2,10 +2,13 @@
 
 Both protocols share the same request_id handshake pattern:
   pending -> approved | rejected
+
+All tracker access is protected by asyncio.Lock.
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -13,9 +16,10 @@ from mini_claude_code.team.bus import MESSAGE_BUS
 
 
 # ---------------------------------------------------------------------------
-# Trackers (in-memory)
+# Trackers (in-memory, lock-protected)
 # ---------------------------------------------------------------------------
 
+_lock = asyncio.Lock()
 shutdown_requests: dict[str, dict[str, Any]] = {}
 plan_requests: dict[str, dict[str, Any]] = {}
 
@@ -25,14 +29,15 @@ plan_requests: dict[str, dict[str, Any]] = {}
 # ---------------------------------------------------------------------------
 
 
-def initiate_shutdown(teammate: str) -> str:
+async def initiate_shutdown(teammate: str) -> str:
     """Lead requests a teammate to shut down gracefully."""
     req_id = str(uuid.uuid4())[:8]
-    shutdown_requests[req_id] = {
-        "target": teammate,
-        "status": "pending",
-    }
-    MESSAGE_BUS.send(
+    async with _lock:
+        shutdown_requests[req_id] = {
+            "target": teammate,
+            "status": "pending",
+        }
+    await MESSAGE_BUS.send(
         "lead",
         teammate,
         "Please shut down gracefully.",
@@ -42,14 +47,16 @@ def initiate_shutdown(teammate: str) -> str:
     return f"Shutdown request {req_id} sent to {teammate} (status: pending)"
 
 
-def handle_shutdown_response(req_id: str, approve: bool, reason: str = "") -> str:
+async def handle_shutdown_response(req_id: str, approve: bool, reason: str = "") -> str:
     """Teammate responds to a shutdown request."""
-    req = shutdown_requests.get(req_id)
-    if not req:
-        return f"Error: Unknown shutdown request '{req_id}'"
-    req["status"] = "approved" if approve else "rejected"
-    MESSAGE_BUS.send(
-        req["target"],
+    async with _lock:
+        req = shutdown_requests.get(req_id)
+        if not req:
+            return f"Error: Unknown shutdown request '{req_id}'"
+        req["status"] = "approved" if approve else "rejected"
+        target = req["target"]
+    await MESSAGE_BUS.send(
+        target,
         "lead",
         reason,
         "shutdown_response",
@@ -63,15 +70,16 @@ def handle_shutdown_response(req_id: str, approve: bool, reason: str = "") -> st
 # ---------------------------------------------------------------------------
 
 
-def submit_plan(sender: str, plan_text: str) -> str:
+async def submit_plan(sender: str, plan_text: str) -> str:
     """Teammate submits a plan for lead approval."""
     req_id = str(uuid.uuid4())[:8]
-    plan_requests[req_id] = {
-        "from": sender,
-        "plan": plan_text,
-        "status": "pending",
-    }
-    MESSAGE_BUS.send(
+    async with _lock:
+        plan_requests[req_id] = {
+            "from": sender,
+            "plan": plan_text,
+            "status": "pending",
+        }
+    await MESSAGE_BUS.send(
         sender,
         "lead",
         plan_text,
@@ -81,17 +89,19 @@ def submit_plan(sender: str, plan_text: str) -> str:
     return f"Plan submitted (request_id={req_id}), awaiting lead approval"
 
 
-def review_plan(request_id: str, approve: bool, feedback: str = "") -> str:
+async def review_plan(request_id: str, approve: bool, feedback: str = "") -> str:
     """Lead reviews and approves/rejects a submitted plan."""
-    req = plan_requests.get(request_id)
-    if not req:
-        return f"Error: Unknown plan request '{request_id}'"
-    req["status"] = "approved" if approve else "rejected"
-    MESSAGE_BUS.send(
+    async with _lock:
+        req = plan_requests.get(request_id)
+        if not req:
+            return f"Error: Unknown plan request '{request_id}'"
+        req["status"] = "approved" if approve else "rejected"
+        sender = req["from"]
+    await MESSAGE_BUS.send(
         "lead",
-        req["from"],
+        sender,
         feedback,
         "plan_approval_response",
         {"request_id": request_id, "approve": approve, "feedback": feedback},
     )
-    return f"Plan {'approved' if approve else 'rejected'} for {req['from']}"
+    return f"Plan {'approved' if approve else 'rejected'} for {sender}"

@@ -1,10 +1,31 @@
 # Mini Claude Code
 
-A LangGraph-based coding agent inspired by [learn-claude-code](https://github.com/shareAI-lab/learn-claude-code). Implements all 12 sessions (s01-s12) — from the core agent loop through autonomous agent teams with git worktree isolation — as a single, working interactive CLI.
+A fully async, thread-safe LangGraph-based coding agent inspired by [learn-claude-code](https://github.com/shareAI-lab/learn-claude-code). Implements all 12 sessions (s01-s12) — from the core agent loop through autonomous agent teams with git worktree isolation — as a single, working interactive CLI.
 
 **Model:** Claude Sonnet 4 (via Anthropic API)
-**Framework:** LangGraph + LangChain
+**Framework:** LangGraph + LangChain (fully async)
 **Package manager:** uv
+
+### Concurrency Model
+
+- **Async everywhere** — every tool, node, and LLM call uses `async/await`
+- **Parallel tool execution** — multiple tool calls from a single LLM response run concurrently via `asyncio.gather`
+- **Non-blocking subprocess** — `asyncio.create_subprocess_shell` instead of blocking `subprocess.run`
+- **Non-blocking LLM calls** — `ainvoke` / `astream` for all Anthropic API calls
+- **Async REPL** — `prompt_toolkit.prompt_async` keeps the event loop responsive
+- **asyncio.Lock on all shared state** — TodoManager, TaskManager, MessageBus, EventStream, TeammateManager config, protocol trackers
+- **Atomic task claiming** — `TaskManager.claim_task()` is lock-protected; concurrent claims are serialized and only one wins
+- **Atomic inbox drain** — `MessageBus.read_inbox()` reads+drains under a single lock, preventing the TOCTOU message-loss bug
+- **Teammates as asyncio.Task** — not threads; teammates share the event loop for true cooperative concurrency
+- **Per-file edit locks** — `edit_file` uses per-path `asyncio.Lock` to prevent concurrent edit races
+
+### Streaming & Live Display
+
+- **Real-time token streaming** — LLM responses appear token-by-token as they are generated, using `streaming=True` on `ChatAnthropic` with an `AsyncCallbackHandler` that writes directly to stdout
+- **Animated thinking spinner** — a braille-dot spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) runs as a background `asyncio.Task` during LLM inference and tool execution, providing visual feedback that the agent is working
+- **Phase-aware indicators** — the spinner shows `Thinking...` (blue) while the LLM generates, and `Running tools...` (cyan) during tool execution
+- **Seamless transitions** — the spinner is automatically replaced by streaming text on the first token, with no flicker or duplicate output
+- **Callback propagation** — `RunnableConfig` with callbacks is passed through LangGraph nodes to the LLM, so token events fire correctly even inside the graph execution
 
 ---
 
@@ -18,10 +39,10 @@ cd mini-claude-code
 echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env
 
 # 3. Run the interactive REPL
-uv run python -m mini_claude_code.main
+uv run mini-claude
 ```
 
-You'll see a Rich-formatted terminal. Type prompts, watch tool calls execute, and use slash commands for introspection.
+You'll see a Rich-formatted terminal with an animated thinking spinner. LLM responses stream in token-by-token as they are generated. Type prompts, watch tool calls execute, and use slash commands for introspection.
 
 ---
 
@@ -60,7 +81,7 @@ preprocess -----> call_llm -----> router
 
 **preprocess** — micro-compacts old tool results, drains background task notifications, checks teammate inboxes, injects todo nag reminders, triggers auto-compaction if tokens exceed the threshold.
 
-**call_llm** — calls `ChatAnthropic` with 28 bound tools and a system prompt containing skill descriptions.
+**call_llm** — calls `ChatAnthropic` (with `streaming=True`) with 28 bound tools and a system prompt containing skill descriptions. Tokens stream to the terminal in real-time via an `AsyncCallbackHandler`.
 
 **tools** — executes tool calls and returns results.
 
@@ -146,7 +167,7 @@ mini-claude-code/
 ├── pyproject.toml                # uv project config + dependencies
 ├── src/mini_claude_code/
 │   ├── __init__.py
-│   ├── main.py                   # Interactive REPL (Rich + prompt-toolkit)
+│   ├── main.py                   # Interactive REPL with streaming + animated spinner
 │   ├── config.py                 # All configuration, paths, thresholds
 │   ├── events.py                 # Append-only JSONL event stream (s12)
 │   ├── agent/

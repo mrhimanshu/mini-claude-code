@@ -1,4 +1,4 @@
-"""Subagent tool: spawn a fresh-context child agent (s04)."""
+"""Async subagent tool: spawn a fresh-context child agent (s04)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from langchain_core.tools import tool
 
 
 @tool
-def delegate_task(prompt: str, description: str = "") -> str:
+async def delegate_task(prompt: str, description: str = "") -> str:
     """Spawn a subagent with fresh context to handle a task.
 
     The subagent starts with no conversation history (clean context).
@@ -25,4 +25,4 @@ def delegate_task(prompt: str, description: str = "") -> str:
     """
     from mini_claude_code.agent.subagent import run_subagent
 
-    return run_subagent(prompt)
+    return await run_subagent(prompt)

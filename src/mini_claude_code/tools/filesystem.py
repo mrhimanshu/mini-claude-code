@@ -1,12 +1,29 @@
-"""File system tools with path sandboxing (s02)."""
+"""Async file system tools with path sandboxing and locking (s02).
+
+edit_file uses an asyncio.Lock to make the read-check-write atomic,
+preventing concurrent edits from losing data.
+"""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from langchain_core.tools import tool
 
 from mini_claude_code.config import WORKDIR
+
+# Per-file locks for atomic edit operations
+_edit_locks: dict[str, asyncio.Lock] = {}
+_edit_locks_guard = asyncio.Lock()
+
+
+async def _get_edit_lock(path: str) -> asyncio.Lock:
+    """Get or create a per-file lock for edit atomicity."""
+    async with _edit_locks_guard:
+        if path not in _edit_locks:
+            _edit_locks[path] = asyncio.Lock()
+        return _edit_locks[path]
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +45,7 @@ def safe_path(p: str) -> Path:
 
 
 @tool
-def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
+async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
     """Read a file from the workspace.
 
     Args:
@@ -41,29 +58,33 @@ def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
     """
     try:
         target = safe_path(path)
-        if target.is_dir():
-            entries = []
-            for entry in sorted(target.iterdir()):
-                name = entry.name + ("/" if entry.is_dir() else "")
-                entries.append(name)
-            return "\n".join(entries) if entries else "(empty directory)"
 
-        text = target.read_text(errors="replace")
-        lines = text.splitlines()
-        start = max(0, offset - 1)
-        end = start + limit
-        selected = lines[start:end]
-        numbered = [f"{start + i + 1}: {line}" for i, line in enumerate(selected)]
-        result = "\n".join(numbered)
-        if len(result) > 50_000:
-            result = result[:50_000] + "\n... [truncated]"
-        return result
+        def _read() -> str:
+            if target.is_dir():
+                entries = []
+                for entry in sorted(target.iterdir()):
+                    name = entry.name + ("/" if entry.is_dir() else "")
+                    entries.append(name)
+                return "\n".join(entries) if entries else "(empty directory)"
+
+            text = target.read_text(errors="replace")
+            lines = text.splitlines()
+            start = max(0, offset - 1)
+            end = start + limit
+            selected = lines[start:end]
+            numbered = [f"{start + i + 1}: {line}" for i, line in enumerate(selected)]
+            result = "\n".join(numbered)
+            if len(result) > 50_000:
+                result = result[:50_000] + "\n... [truncated]"
+            return result
+
+        return await asyncio.to_thread(_read)
     except Exception as e:
         return f"Error: {e}"
 
 
 @tool
-def write_file(path: str, content: str) -> str:
+async def write_file(path: str, content: str) -> str:
     """Write content to a file in the workspace (creates parent dirs).
 
     Args:
@@ -75,16 +96,20 @@ def write_file(path: str, content: str) -> str:
     """
     try:
         target = safe_path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
-        return f"Wrote {len(content)} chars to {path}"
+
+        def _write() -> str:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+            return f"Wrote {len(content)} chars to {path}"
+
+        return await asyncio.to_thread(_write)
     except Exception as e:
         return f"Error: {e}"
 
 
 @tool
-def edit_file(path: str, old_text: str, new_text: str) -> str:
-    """Replace an exact string in a file.
+async def edit_file(path: str, old_text: str, new_text: str) -> str:
+    """Replace an exact string in a file (atomic read-check-write).
 
     Args:
         path: Relative path to the file.
@@ -96,17 +121,24 @@ def edit_file(path: str, old_text: str, new_text: str) -> str:
     """
     try:
         target = safe_path(path)
-        content = target.read_text()
-        count = content.count(old_text)
-        if count == 0:
-            return f"Error: old_text not found in {path}"
-        if count > 1:
-            return (
-                f"Error: Found {count} matches for old_text in {path}. "
-                "Provide more context to make it unique."
-            )
-        new_content = content.replace(old_text, new_text, 1)
-        target.write_text(new_content)
-        return f"Edited {path} (replaced 1 occurrence)"
+        lock = await _get_edit_lock(str(target))
+
+        async with lock:
+
+            def _edit() -> str:
+                content = target.read_text()
+                count = content.count(old_text)
+                if count == 0:
+                    return f"Error: old_text not found in {path}"
+                if count > 1:
+                    return (
+                        f"Error: Found {count} matches for old_text in {path}. "
+                        "Provide more context to make it unique."
+                    )
+                new_content = content.replace(old_text, new_text, 1)
+                target.write_text(new_content)
+                return f"Edited {path} (replaced 1 occurrence)"
+
+            return await asyncio.to_thread(_edit)
     except Exception as e:
         return f"Error: {e}"

@@ -27,6 +27,7 @@ from mini_claude_code.config import (
     MAX_TOKENS,
     MODEL_NAME,
     NAG_ROUNDS_THRESHOLD,
+    PLAN_SYSTEM_PROMPT_TEMPLATE,
     SYSTEM_PROMPT_TEMPLATE,
     WORKDIR,
 )
@@ -271,3 +272,64 @@ def route_response(state: AgentState) -> Literal["tools", "end"]:
     if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
         return "tools"
     return "end"
+
+
+# ---------------------------------------------------------------------------
+# Plan mode LLM node (no tools, structured output)
+# ---------------------------------------------------------------------------
+
+_plan_llm_instance: ChatAnthropic | None = None
+_plan_llm_lock = asyncio.Lock()
+
+
+async def _get_plan_llm() -> ChatAnthropic:
+    """Get or create the plan-mode LLM (no tools bound)."""
+    global _plan_llm_instance
+    async with _plan_llm_lock:
+        if _plan_llm_instance is None:
+            _plan_llm_instance = ChatAnthropic(
+                model_name=MODEL_NAME,
+                api_key=ANTHROPIC_API_KEY,
+                max_tokens=MAX_TOKENS,
+                timeout=120,
+                stop=None,
+                streaming=True,
+            )
+    return _plan_llm_instance
+
+
+def _build_plan_system_prompt() -> str:
+    """Build the system prompt for plan mode."""
+    skills_desc = SKILL_LOADER.get_descriptions()
+    skills_section = (
+        f"Available skills (use load_skill to load full instructions):\n{skills_desc}"
+        if skills_desc != "(no skills loaded)"
+        else ""
+    )
+    return PLAN_SYSTEM_PROMPT_TEMPLATE.format(
+        workdir=WORKDIR,
+        skills_section=skills_section,
+    )
+
+
+def make_plan_llm_node():
+    """Factory: returns an async node for plan-mode LLM calls (no tools)."""
+
+    async def plan_llm_node(
+        state: AgentState, config: RunnableConfig
+    ) -> dict[str, Any]:
+        llm = await _get_plan_llm()
+        system_prompt = _build_plan_system_prompt()
+
+        messages = list(state["messages"])
+        if not messages or not isinstance(messages[0], SystemMessage):
+            messages = [SystemMessage(content=system_prompt)] + messages
+
+        response = await llm.ainvoke(messages, config=config)
+
+        return {
+            "messages": [response],
+            "iteration_count": state.get("iteration_count", 0) + 1,
+        }
+
+    return plan_llm_node

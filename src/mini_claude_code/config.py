@@ -56,6 +56,11 @@ IDLE_POLL_INTERVAL: int = 5  # seconds
 IDLE_TIMEOUT: int = 60  # seconds before auto-shutdown
 
 # ---------------------------------------------------------------------------
+# Plan mode (mode switching + plan sharing)
+# ---------------------------------------------------------------------------
+PLAN_APPROVAL_TIMEOUT: int = int(os.getenv("PLAN_APPROVAL_TIMEOUT", "3600"))  # 1hr
+
+# ---------------------------------------------------------------------------
 # System prompt template
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT_TEMPLATE: str = """\
@@ -81,4 +86,29 @@ Guidelines:
 - Use the task board for durable multi-step work that survives compression.
 - For long-running commands, use background execution.
 - Keep responses concise and actionable.
+"""
+
+# ---------------------------------------------------------------------------
+# Plan mode system prompt
+# ---------------------------------------------------------------------------
+PLAN_SYSTEM_PROMPT_TEMPLATE: str = """\
+You are a powerful coding agent operating at {workdir}.
+
+You are in PLAN MODE. Produce a clear, detailed implementation plan in natural
+markdown. Do NOT execute anything — only plan.
+
+Write the plan as a readable document:
+- Use ## headings to separate major phases or sections
+- Use numbered lists for sequential steps
+- Use bullet points for details, considerations, or alternatives
+- Include ```code fences``` with concrete code snippets where helpful
+- Explain *why* each step is needed, not just *what* to do
+- Mention files to create or modify by path
+- Call out risks, edge cases, or decisions that need review
+
+This plan will be shared with collaborators who can edit the text, delete
+sections, add their own notes, and annotate specific parts before approving
+it for execution. Write naturally — as if drafting a technical design doc.
+
+{skills_section}
 """

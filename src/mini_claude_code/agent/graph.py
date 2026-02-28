@@ -36,6 +36,7 @@ from langgraph.graph import END, StateGraph
 
 from mini_claude_code.agent.nodes import (
     make_llm_node,
+    make_plan_llm_node,
     make_tool_node,
     preprocess_node,
     route_response,
@@ -77,5 +78,23 @@ def build_agent_graph(tools: list | None = None):
         },
     )
     graph.add_edge("tools", "preprocess")  # loop back
+
+    return graph.compile()
+
+
+def build_plan_graph():
+    """Build and compile the plan-mode graph (no tools, single LLM call).
+
+    Graph structure:
+        START → call_plan_llm → END
+
+    The LLM is instructed to output a structured JSON plan.
+    """
+    graph = StateGraph(AgentState)
+
+    graph.add_node("call_plan_llm", make_plan_llm_node())
+
+    graph.set_entry_point("call_plan_llm")
+    graph.add_edge("call_plan_llm", END)
 
     return graph.compile()

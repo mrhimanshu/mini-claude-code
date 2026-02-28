@@ -46,19 +46,62 @@ You'll see a Rich-formatted terminal with an animated thinking spinner. LLM resp
 
 ---
 
+## Plan Mode — Collaborative Plan Review
+
+Mini Claude Code supports a **Plan Mode** for collaborative, multi-user plan review before execution. Press **Tab** or type `/mode` to switch between Build Mode (default) and Plan Mode.
+
+### How It Works
+
+1. **Generate a plan** — In Plan Mode, type your request. The LLM produces a structured markdown plan (rendered with Rich formatting in the terminal).
+2. **Share for review** — A local web server starts automatically and provides a URL. If ngrok or cloudflared is available, a public tunnel URL is created for remote reviewers.
+3. **Collaborate in real-time** — Reviewers open the URL in their browser, join with a username, and can:
+   - **Edit** the plan directly (contenteditable with Turndown.js for lossless markdown round-tripping)
+   - **Delete** or **Add Text** via the selection toolbar (tracked as `<ins>`/`<del>` with per-user colors)
+   - **Annotate** specific text ranges (Google Docs-style sidebar comments)
+   - **Request Changes** — adds feedback as an annotation without killing the flow; the plan stays editable
+4. **Per-user color coding** — Each user is assigned a unique color from an 8-color palette. Their edits, annotations, user chips, and edit history entries are all rendered in that color, so you can instantly see who changed what.
+5. **Multi-user approval** — Every connected reviewer (including the CLI user) must approve. The approval bar shows per-user status with checkmarks (`2/4 approved`). The terminal displays each approval as it happens:
+   ```
+   alice approved the plan (1/3)
+   bob approved the plan (2/3)
+   ```
+   If a reviewer disconnects before approving, they are removed from the required set — remaining approvers are sufficient.
+6. **Execute** — Once all reviewers approve, the final edited plan text is sent to the LLM for execution. The plan sent to the LLM is **clean** — no annotations, no reviewer markers, no tracking metadata. Just the approved text.
+7. **Reject** — Any reviewer can fully reject/abandon the plan, which ends the flow.
+
+### Plan Mode Slash Commands
+
+| Command                  | Description                                          |
+|--------------------------|------------------------------------------------------|
+| `/mode`                  | Toggle between Build and Plan mode (or press Tab)    |
+| `/approve`               | Approve the plan (counts as one reviewer)            |
+| `/reject [reason]`       | Reject and abandon the plan                          |
+| `/request-changes [msg]` | Request changes (plan stays open for editing)        |
+| `/share`                 | Show the plan sharing URL                            |
+| `/plan`                  | Display the current plan in the terminal             |
+
+---
+
 ## Slash Commands
 
-| Command    | Description                        |
-|------------|------------------------------------|
-| `/help`    | Show all available commands         |
-| `/todos`   | Display current todo list           |
-| `/tasks`   | Show the file-based task board      |
-| `/team`    | Show teammate roster and statuses   |
-| `/inbox`   | Check the lead agent's inbox        |
-| `/bg`      | Show background task statuses       |
-| `/compact` | Trigger manual context compaction   |
-| `/model`   | Show current model name             |
-| `/quit`    | Exit the REPL                       |
+| Command                  | Description                                          |
+|--------------------------|------------------------------------------------------|
+| `/help`                  | Show all available commands                          |
+| `/mode`                  | Toggle Build/Plan mode (or press Tab)                |
+| `/approve`               | Approve the current plan locally                     |
+| `/reject [reason]`       | Reject and abandon the plan                          |
+| `/request-changes [msg]` | Request changes (plan stays open for editing)        |
+| `/share`                 | Show the plan sharing URL                            |
+| `/plan`                  | Display the current plan                             |
+| `/todos`                 | Display current todo list                            |
+| `/tasks`                 | Show the file-based task board                       |
+| `/team`                  | Show teammate roster and statuses                    |
+| `/inbox`                 | Check the lead agent's inbox                         |
+| `/bg`                    | Show background task statuses                        |
+| `/compact`               | Trigger manual context compaction                    |
+| `/model`                 | Show current model name                              |
+| `/clear`                 | Reset .tasks and .team state                         |
+| `/quit`                  | Exit the REPL                                        |
 
 ---
 
@@ -154,6 +197,19 @@ When a teammate finishes its work, it enters an idle polling phase: every 5 seco
 
 `WorktreeManager` creates git worktrees bound to tasks by ID. Each worktree gets its own directory and branch. The `worktree_remove` closeout pattern handles teardown + task completion atomically. An append-only `EventStream` in `.worktrees/events.jsonl` emits before/after/failed events for every lifecycle transition.
 
+### Plan Mode — Collaborative Plan Review & Execution
+`plan/manager.py`, `plan/server.py`, `plan/templates.py`, `plan/tunnel.py`, `main.py`
+
+A full collaborative plan review system built on top of the agent:
+
+- **Plan generation** — A plan-specific LangGraph (single LLM call, no tools) generates structured markdown plans. The plan system prompt instructs the LLM to produce headings, code fences, and bullet points.
+- **Real-time collaboration** — An embedded aiohttp web server with WebSocket support serves an interactive SPA. Multiple users can edit the plan simultaneously with conflict-free updates.
+- **Per-user color tracking** — Each collaborator is assigned a unique color from an 8-color palette. Edits (`<ins>`/`<del>` from the selection toolbar), annotations, user chips, and edit history are all rendered in the user's color.
+- **Lossless markdown editing** — Turndown.js converts the edited HTML back to markdown on every change, preserving headings, bold, code blocks, lists, and links through the edit round-trip (solving the `contenteditable` → `innerText` data loss problem).
+- **Multi-user approval** — `PlanManager` tracks `_approved_users` and `_connected_users` sets. `record_approval()` adds a user and checks if all connected users (including the CLI user) have approved. Users who disconnect are removed from the required set. The approval bar shows per-user status with checkmarks.
+- **Terminal rendering** — Plan output uses Rich `Markdown` rendering (no raw markdown symbols). Approval progress is displayed in real-time as each reviewer approves.
+- **Clean execution** — The final plan sent to the LLM contains only the approved text — no annotations, no reviewer markers, no tracking metadata.
+
 ---
 
 ## Project Structure
@@ -177,6 +233,12 @@ mini-claude-code/
 │   │   └── subagent.py           # Fresh-context subagent runner (s04)
 │   ├── context/
 │   │   └── compactor.py          # 3-layer compression + identity re-injection
+│   ├── plan/
+│   │   ├── __init__.py           # Re-exports PLAN_MANAGER, Plan, Annotation, Edit
+│   │   ├── manager.py            # Plan data model, PlanManager singleton, multi-user approval
+│   │   ├── server.py             # Embedded aiohttp web server + WebSocket collaboration
+│   │   ├── templates.py          # Full HTML/CSS/JS SPA for plan review (per-user colors, Turndown.js)
+│   │   └── tunnel.py             # Auto-detect ngrok/cloudflared for public URL tunneling
 │   ├── team/
 │   │   ├── autonomous.py         # Task board scanning + claiming (s11)
 │   │   ├── bus.py                # JSONL MessageBus (s09)
@@ -214,6 +276,7 @@ All settings are in `.env` or environment variables:
 | `MAX_TOKENS`           | `8192`                       | Max tokens per LLM response          |
 | `TOKEN_THRESHOLD`      | `50000`                      | Token count that triggers auto-compact |
 | `MAX_AGENT_ITERATIONS` | `100`                        | Safety limit for agent loop cycles   |
+| `PLAN_APPROVAL_TIMEOUT`| `3600`                       | Seconds to wait for plan approval    |
 | `WORKDIR`              | Current working directory    | Workspace root for file sandboxing   |
 
 ---
@@ -276,6 +339,12 @@ Spawn alice (coder) and bob (tester). Have alice write a module, then message bo
 
 # Worktree isolation
 Create a worktree "auth-refactor" bound to task 1, run tests inside it
+
+# Plan Mode (press Tab first to switch to Plan Mode)
+Design a REST API for a user management system with auth, CRUD, and rate limiting
+# -> Generates a plan, starts sharing server, share the URL with your team
+# -> Reviewers edit, annotate, request changes, then approve when ready
+# -> Once all approve, the agent executes the final plan
 ```
 
 ---

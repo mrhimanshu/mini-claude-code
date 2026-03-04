@@ -56,6 +56,15 @@ IDLE_POLL_INTERVAL: int = 5  # seconds
 IDLE_TIMEOUT: int = 60  # seconds before auto-shutdown
 
 # ---------------------------------------------------------------------------
+# Human-in-the-loop approval for file changes
+# ---------------------------------------------------------------------------
+REQUIRE_APPROVAL: bool = os.getenv("REQUIRE_APPROVAL", "true").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+
+# ---------------------------------------------------------------------------
 # Plan mode (mode switching + plan sharing)
 # ---------------------------------------------------------------------------
 PLAN_APPROVAL_TIMEOUT: int = int(os.getenv("PLAN_APPROVAL_TIMEOUT", "3600"))  # 1hr

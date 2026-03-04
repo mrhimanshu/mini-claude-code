@@ -2,6 +2,10 @@
 
 edit_file uses an asyncio.Lock to make the read-check-write atomic,
 preventing concurrent edits from losing data.
+
+When REQUIRE_APPROVAL is enabled (default), write_file and edit_file
+show a colored unified diff and prompt the user for approval before
+writing to disk.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 from mini_claude_code.config import WORKDIR
+from mini_claude_code.tools.approval import request_approval
 
 # Per-file locks for atomic edit operations
 _edit_locks: dict[str, asyncio.Lock] = {}
@@ -97,6 +102,19 @@ async def write_file(path: str, content: str) -> str:
     try:
         target = safe_path(path)
 
+        # Read existing content for diffing (empty string if new file)
+        old_content = ""
+        operation = "create"
+        if target.exists():
+            old_content = await asyncio.to_thread(target.read_text, "utf-8")
+            operation = "write"
+
+        approved = await request_approval(
+            path, old_content, content, operation=operation
+        )
+        if not approved:
+            return f"Rejected: write to {path} was rejected by the user."
+
         def _write() -> str:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content)
@@ -124,21 +142,27 @@ async def edit_file(path: str, old_text: str, new_text: str) -> str:
         lock = await _get_edit_lock(str(target))
 
         async with lock:
+            # Read current content and validate before asking for approval
+            content = await asyncio.to_thread(target.read_text)
+            count = content.count(old_text)
+            if count == 0:
+                return f"Error: old_text not found in {path}"
+            if count > 1:
+                return (
+                    f"Error: Found {count} matches for old_text in {path}. "
+                    "Provide more context to make it unique."
+                )
 
-            def _edit() -> str:
-                content = target.read_text()
-                count = content.count(old_text)
-                if count == 0:
-                    return f"Error: old_text not found in {path}"
-                if count > 1:
-                    return (
-                        f"Error: Found {count} matches for old_text in {path}. "
-                        "Provide more context to make it unique."
-                    )
-                new_content = content.replace(old_text, new_text, 1)
-                target.write_text(new_content)
-                return f"Edited {path} (replaced 1 occurrence)"
+            new_content = content.replace(old_text, new_text, 1)
 
-            return await asyncio.to_thread(_edit)
+            # Show diff and request approval
+            approved = await request_approval(
+                path, content, new_content, operation="edit"
+            )
+            if not approved:
+                return f"Rejected: edit to {path} was rejected by the user."
+
+            await asyncio.to_thread(target.write_text, new_content)
+            return f"Edited {path} (replaced 1 occurrence)"
     except Exception as e:
         return f"Error: {e}"

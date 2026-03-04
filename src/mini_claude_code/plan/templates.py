@@ -634,10 +634,44 @@ async function fetchPlan() {
   updateStatus();
 }
 
+// --- Cursor save / restore helpers ---
+function getCaretCharOffset(element) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return -1;
+  const range = sel.getRangeAt(0);
+  const preRange = range.cloneRange();
+  preRange.selectNodeContents(element);
+  preRange.setEnd(range.startContainer, range.startOffset);
+  return preRange.toString().length;
+}
+function setCaretCharOffset(element, offset) {
+  if (offset < 0) return;
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null);
+  let pos = 0;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const len = node.textContent.length;
+    if (pos + len >= offset) {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.setStart(node, offset - pos);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    pos += len;
+  }
+}
+
 // --- Rendering ---
 function renderDocument() {
   const editor = document.getElementById('editor');
   if (!plan) return;
+
+  // Save cursor position if the editor is focused
+  const hasFocus = document.activeElement === editor;
+  const caretOffset = hasFocus ? getCaretCharOffset(editor) : -1;
 
   // Render markdown to HTML
   let html = marked.parse(plan.content || '', { breaks: true });
@@ -660,6 +694,11 @@ function renderDocument() {
   }
 
   editor.innerHTML = html;
+
+  // Restore cursor position if the editor was focused
+  if (hasFocus && caretOffset >= 0) {
+    setCaretCharOffset(editor, caretOffset);
+  }
 
   // Syntax highlight code blocks
   editor.querySelectorAll('pre code').forEach(el => {

@@ -151,8 +151,18 @@ class PlanManager:
 
     # -- Content editing ---------------------------------------------------
 
-    async def update_content(self, new_content: str, user: str = "local") -> None:
-        """Replace the plan content wholesale, recording an edit."""
+    async def update_content(
+        self, new_content: str, user: str = "local", *, notify: bool = True
+    ) -> None:
+        """Replace the plan content wholesale, recording an edit.
+
+        When *notify* is ``False`` the update callbacks are **not** fired.
+        The WebSocket handler passes ``notify=False`` because it already
+        broadcasts the change to other clients itself — firing the callback
+        would cause a redundant ``plan_update`` to be sent to **all** clients
+        (including the sender), which re-renders the editor and resets the
+        cursor to the top of the document.
+        """
         async with self._lock:
             if self._current_plan is None:
                 return
@@ -168,7 +178,8 @@ class PlanManager:
             )
             self._current_plan.edit_history.append(edit)
             self._current_plan.content = new_content
-        await self._notify_update()
+        if notify:
+            await self._notify_update()
 
     async def apply_edit(self, edit: Edit) -> None:
         """Apply a granular edit and adjust annotation offsets."""

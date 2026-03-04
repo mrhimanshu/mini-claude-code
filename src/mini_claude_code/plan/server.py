@@ -240,7 +240,11 @@ class PlanServer:
         if msg_type == "content_update":
             content = data.get("content", "")
             edit_data = data.get("edit")
-            await PLAN_MANAGER.update_content(content, user=username)
+            # notify=False: we broadcast the change ourselves (with
+            # exclude=sender) below.  If we let _notify_update fire, it
+            # broadcasts plan_update to ALL clients including the sender,
+            # which re-renders the editor and resets the cursor to the top.
+            await PLAN_MANAGER.update_content(content, user=username, notify=False)
             broadcast_msg: dict[str, Any] = {
                 "type": "content_update",
                 "content": content,

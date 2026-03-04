@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import os
 import sys
 import traceback
 
@@ -38,6 +39,7 @@ from mini_claude_code.plan.manager import PLAN_MANAGER, Annotation, Plan
 from mini_claude_code.plan.server import PLAN_SERVER
 from mini_claude_code.team.bus import MESSAGE_BUS
 from mini_claude_code.team.manager import TEAMMATE_MANAGER
+from mini_claude_code.tools.approval import set_spinner as set_approval_spinner
 from mini_claude_code.tools.background import BG_MANAGER
 from mini_claude_code.tools.task_board import TASK_MANAGER
 from mini_claude_code.tools.todo import TODO_MANAGER
@@ -127,17 +129,31 @@ class TokenStreamer(AsyncCallbackHandler):
     so the response text cleanly replaces the spinner line.
 
     When ``silent=True`` tokens are buffered but **not** written to stdout.
-    This is used in Plan Mode so the raw markdown is never shown; the caller
-    renders the buffered text with Rich Markdown after generation completes.
+
+    When ``clearable=True`` tokens are streamed to stdout in a dimmed style
+    (so the user can watch the agent "think") **and** the line count is
+    tracked.  After generation the caller can use ``clear_output()`` to
+    erase the raw streamed text and replace it with a clean Rich render.
     """
 
-    def __init__(self, spinner: AsyncSpinner, *, silent: bool = False) -> None:
+    def __init__(
+        self,
+        spinner: AsyncSpinner,
+        *,
+        silent: bool = False,
+        clearable: bool = False,
+    ) -> None:
         super().__init__()
         self.spinner = spinner
         self.buffer: str = ""
         self.streaming: bool = False
         self._first_token: bool = True
         self.silent: bool = silent
+        self.clearable: bool = clearable
+        # Track how many terminal lines were written so we can erase them.
+        self._lines_written: int = 0
+        # Track current column position to count line wraps.
+        self._col: int = 0
 
     # -- called at the start of each LLM invocation -----------------------
 
@@ -146,6 +162,8 @@ class TokenStreamer(AsyncCallbackHandler):
         self.buffer = ""
         self.streaming = False
         self._first_token = True
+        self._lines_written = 0
+        self._col = 0
 
     # -- called for every text token --------------------------------------
 
@@ -168,9 +186,33 @@ class TokenStreamer(AsyncCallbackHandler):
                 # Blank line for visual separation after the spinner
                 sys.stdout.write("\n")
                 sys.stdout.flush()
+                if self.clearable:
+                    self._lines_written += 1
         self.streaming = True
         self.buffer += text
-        if not self.silent:
+
+        if self.silent:
+            return
+
+        if self.clearable:
+            # Stream in dim style so it's visually distinct from the final plan
+            sys.stdout.write(f"\033[2m{text}\033[0m")
+            sys.stdout.flush()
+            # Count newlines + estimate line wraps for clearing later
+            try:
+                term_width = os.get_terminal_size().columns
+            except OSError:
+                term_width = 80
+            for ch in text:
+                if ch == "\n":
+                    self._lines_written += 1
+                    self._col = 0
+                else:
+                    self._col += 1
+                    if self._col >= term_width:
+                        self._lines_written += 1
+                        self._col = 0
+        else:
             sys.stdout.write(text)
             sys.stdout.flush()
 
@@ -178,9 +220,27 @@ class TokenStreamer(AsyncCallbackHandler):
 
     async def on_llm_end(self, *_args, **_kwargs) -> None:  # type: ignore[override]
         if self.streaming and self.buffer and not self.silent:
+            if self.clearable:
+                # Count the trailing newline we're about to add
+                self._lines_written += 1
             # End the streamed block with a blank line
             sys.stdout.write("\n")
             sys.stdout.flush()
+
+    # -- clear streamed output (for clearable mode) -----------------------
+
+    def clear_output(self) -> None:
+        """Erase all lines written to stdout during streaming.
+
+        Moves the cursor up ``_lines_written`` lines and clears each one.
+        """
+        if self._lines_written <= 0:
+            return
+        # Move up and clear each line
+        for _ in range(self._lines_written):
+            sys.stdout.write("\033[A\033[2K")
+        sys.stdout.write("\r")
+        sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -429,10 +489,10 @@ async def run_plan_flow(
         "iteration_count": 0,
     }
 
-    # Use a silent streamer for plan mode — we buffer the raw markdown
-    # and render it with Rich Markdown after generation completes, so the
-    # terminal never shows raw markdown symbols like # ** ``` etc.
-    plan_streamer = TokenStreamer(spinner, silent=True)
+    # Use a clearable streamer for plan mode — tokens stream to stdout in
+    # dim text so the user can watch the agent "think", then the raw output
+    # is erased and replaced with a clean Rich Markdown render.
+    plan_streamer = TokenStreamer(spinner, clearable=True)
     spinner.start("Planning...", "1;33")
     config = {"callbacks": [plan_streamer]}
 
@@ -448,11 +508,14 @@ async def run_plan_flow(
         console.print(f"[red]Error generating plan: {e}[/red]")
         return all_messages
 
-    # Render the plan with Rich Markdown for proper terminal formatting
+    # Erase the raw streamed thinking and replace with formatted plan
     plan_text = plan_streamer.buffer.strip()
     if not plan_text:
         console.print("[red]No plan generated. Try rephrasing your request.[/red]")
         return all_messages
+
+    # Clear the dimmed streaming output
+    plan_streamer.clear_output()
 
     # Display the plan with proper Rich Markdown formatting
     console.print()
@@ -758,6 +821,7 @@ async def async_main() -> None:
 
     spinner = AsyncSpinner()
     streamer = TokenStreamer(spinner)
+    set_approval_spinner(spinner)
 
     _print_mode_indicator()
 

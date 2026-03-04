@@ -89,6 +89,10 @@ You have access to tools for:
 {skills_section}
 
 Guidelines:
+- **Skills first**: Before starting a task, check if an available skill matches the
+  user's request. If it does, call load_skill(name="<skill-name>") FIRST to get the
+  full instructions, then follow them step by step. Always prefer skill instructions
+  over improvising.
 - Use the todo tool to plan multi-step tasks. Mark items in_progress before starting, completed when done.
 - Prefer tools over prose. Act, don't describe.
 - Use subagents (task tool) to explore without polluting your context.

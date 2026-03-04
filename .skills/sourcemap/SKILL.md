@@ -1,104 +1,60 @@
 ---
 name: sourcemap-analyze
-description: Analyze a codebase with SourceMap AI — zip, index, and launch the interactive knowledge graph UI
+description: Analyze/explore/visualize a codebase — zip the project, launch SourceMap AI web UI, and auto-load it for interactive knowledge graph exploration. Use when user says "analyze", "explore codebase", "visualize", or "sourcemap".
 ---
 
 # SourceMap AI Codebase Analysis
 
-Use this skill when the user asks to **analyze the codebase**, **explore the codebase structure**,
-**visualize dependencies**, **launch SourceMap**, or anything related to deep codebase analysis
-with SourceMap AI.
+Follow these steps EXACTLY in order. Do NOT improvise or guess paths.
+Run each step as a separate bash_tool call so the user can see progress.
 
-SourceMap AI indexes a codebase into a knowledge graph (dependencies, call chains, clusters,
-execution flows) and exposes it through an interactive web UI with AI chat.
+## Step 1: Start the SourceMap Web UI (if not already running)
 
-## Paths
-
-- **SourceMap CLI**: `/Users/himanshu/Downloads/SourceMap AI/sourcemap/dist/cli/index.js`
-- **SourceMap Web UI**: `/Users/himanshu/Downloads/SourceMap AI/sourcemap-web/`
-
-## Steps
-
-### 1. Create a ZIP of the workspace
-
-Zip the current workspace, **excluding** large/irrelevant directories:
+Check if the Vite dev server is running on port 5173. If not, start it in the background:
 
 ```bash
-cd $WORKDIR && zip -r /tmp/sourcemap-upload.zip . \
-  -x ".venv/*" ".git/*" "node_modules/*" "__pycache__/*" \
-     ".tasks/*" ".team/*" ".worktrees/*" ".transcripts/*" \
-     "*.pyc" ".DS_Store" ".ruff_cache/*" "*.egg-info/*" \
-     "dist/*" "build/*" ".sourcemap/*"
+curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/ 2>/dev/null
 ```
 
-Tell the user the zip was created and its size.
-
-### 2. Index the codebase with the SourceMap CLI
-
-Run the SourceMap CLI `analyze` command on the current workspace:
+If the response is NOT `200`, start the dev server:
 
 ```bash
-node "/Users/himanshu/Downloads/SourceMap AI/sourcemap/dist/cli/index.js" analyze "$WORKDIR"
+cd "/Users/himanshu/Downloads/SourceMap AI/sourcemap-web" && npx vite --port 5173 &
 ```
 
-This creates a `.sourcemap/` directory in the workspace with the KuzuDB knowledge graph
-index. Wait for indexing to complete — it may take a minute for larger codebases.
+Use `background_run` for this so it runs in the background. Then wait 8 seconds and
+verify it is serving 200 on http://localhost:5173/.
 
-### 3. Start the SourceMap backend server
+If port 5173 already returns 200, skip starting it.
 
-Start the local HTTP server so the web UI can connect to the indexed repo:
+## Step 2: Create the ZIP and copy to web UI
+
+Create a zip with all files inside a root folder named after the project.
+The project name is auto-detected from the workspace directory name.
+Run this as ONE bash command:
 
 ```bash
-node "/Users/himanshu/Downloads/SourceMap AI/sourcemap/dist/cli/index.js" serve &
+WORKDIR="/Users/himanshu/Downloads/mini-claude-code" && PROJ=$(basename "$WORKDIR") && rm -f "/tmp/${PROJ}.zip" && cd "$(dirname "$WORKDIR")" && zip -r "/tmp/${PROJ}.zip" "$PROJ" -x "${PROJ}/.venv/*" "${PROJ}/.git/*" "${PROJ}/node_modules/*" "${PROJ}/__pycache__/*" "${PROJ}/.tasks/*" "${PROJ}/.team/*" "${PROJ}/.worktrees/*" "${PROJ}/.transcripts/*" "${PROJ}/*.pyc" "${PROJ}/.DS_Store" "${PROJ}/.ruff_cache/*" "${PROJ}/*.egg-info/*" "${PROJ}/dist/*" "${PROJ}/build/*" "${PROJ}/.sourcemap/*" "${PROJ}/.env" "${PROJ}/uv.lock" && cp "/tmp/${PROJ}.zip" "/Users/himanshu/Downloads/SourceMap AI/sourcemap-web/public/${PROJ}.zip" && ls -lh "/tmp/${PROJ}.zip"
 ```
 
-Run this in the **background**. The server typically starts on port 3001.
+This produces a zip where all files are under `mini-claude-code/` (e.g. `mini-claude-code/pyproject.toml`).
 
-### 4. Start the SourceMap Web UI
+## Step 3: Open the browser with auto-load
 
-Launch the Vite dev server for the interactive web UI:
+IMPORTANT: Run this EXACT command. Do NOT rename the parameter or change the URL structure.
 
 ```bash
-cd "/Users/himanshu/Downloads/SourceMap AI/sourcemap-web" && npm run dev &
+PROJ=$(basename "/Users/himanshu/Downloads/mini-claude-code") && open "http://localhost:5173/?autozip=${PROJ}.zip"
 ```
 
-Run this in the **background**. It typically starts on `http://localhost:5173`.
+This makes the web UI automatically fetch the zip and process it. The UI will
+show a loading screen with progress (extracting, parsing, clustering, etc.).
 
-### 5. Open the browser
-
-```bash
-open http://localhost:5173
-```
-
-On Linux use `xdg-open`, on macOS use `open`.
-
-### 6. Report to the user
+## Step 4: Tell the user
 
 Tell the user:
-
-- The codebase has been indexed into a knowledge graph
-- The SourceMap web UI is running at `http://localhost:5173`
-- The backend server is serving the indexed data
-- A zip of the project is also available at `/tmp/sourcemap-upload.zip` if they want to
-  use the hosted version at `https://sourcemap.vercel.app` (drag & drop the zip)
-- They can explore: dependency graph visualization, AI chat about the codebase,
-  call chain tracing, cluster analysis, impact analysis
-
-### Alternative: Web-only approach (no CLI)
-
-If the CLI indexing fails for any reason, fall back to the web-only approach:
-
-1. Create the zip (step 1 above)
-2. Open `https://sourcemap.vercel.app` in the browser
-3. Tell the user to drag & drop `/tmp/sourcemap-upload.zip` into the web UI
-4. Everything runs client-side in the browser (WASM) — no server needed
-
-## Cleanup
-
-When the user is done, kill the background processes:
-
-```bash
-# Find and kill sourcemap serve and vite dev server
-pkill -f "sourcemap.*serve" 2>/dev/null
-pkill -f "vite.*sourcemap-web" 2>/dev/null
-```
+- The SourceMap AI web UI has opened in their browser
+- The codebase is being auto-loaded and indexed (they will see a progress screen)
+- Once indexing completes they can: explore the dependency graph, use AI chat to
+  ask questions about the code, trace call chains, view clusters, and run
+  impact analysis

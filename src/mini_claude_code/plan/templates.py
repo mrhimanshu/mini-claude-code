@@ -292,6 +292,23 @@ PLAN_EDITOR_HTML = r"""<!DOCTYPE html>
   .toast-error { background:#3d1f1f; color:var(--red); }
   @keyframes slideIn { from{transform:translateX(100%);opacity:0}to{transform:none;opacity:1} }
 
+  /* ---- Closing Overlay ---- */
+  .closing-overlay {
+    position:fixed; inset:0; z-index:2000;
+    background:rgba(0,0,0,0.85); display:flex;
+    flex-direction:column; align-items:center; justify-content:center;
+    animation:fadeIn 0.3s ease;
+  }
+  .closing-overlay h2 {
+    color:var(--green); font-size:28px; margin:0 0 12px;
+    font-weight:700;
+  }
+  .closing-overlay p {
+    color:var(--fg); font-size:16px; margin:0;
+    opacity:0.8;
+  }
+  @keyframes fadeIn { from{opacity:0}to{opacity:1} }
+
   /* ---- Username modal ---- */
   .modal-overlay {
     position:fixed; top:0; left:0; width:100%; height:100%;
@@ -937,6 +954,29 @@ function resolveAnnotation(annId) {
   renderDocument();
 }
 
+// --- Closing Overlay ---
+function showClosingOverlay() {
+  const overlay = document.createElement('div');
+  overlay.className = 'closing-overlay';
+  overlay.innerHTML = '<h2>Your plan is submitted</h2><p id="closing-countdown">Closing tab in 5 seconds...</p>';
+  document.body.appendChild(overlay);
+  let remaining = 5;
+  const interval = setInterval(() => {
+    remaining--;
+    const el = document.getElementById('closing-countdown');
+    if (remaining > 0) {
+      el.textContent = 'Closing tab in ' + remaining + ' second' + (remaining !== 1 ? 's' : '') + '...';
+    } else {
+      clearInterval(interval);
+      el.textContent = 'Closing tab...';
+      try { window.close(); } catch(e) {}
+      setTimeout(() => {
+        el.textContent = 'You can safely close this tab.';
+      }, 500);
+    }
+  }, 1000);
+}
+
 // --- Approve / Request Changes / Reject ---
 function approvePlan() {
   if (!confirm('Approve this plan?')) return;
@@ -944,6 +984,7 @@ function approvePlan() {
   const btn = document.getElementById('btn-approve');
   btn.textContent = 'You Approved';
   btn.disabled = true;
+  showClosingOverlay();
 }
 
 function requestChanges() {
